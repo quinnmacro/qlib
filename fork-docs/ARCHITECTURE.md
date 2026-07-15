@@ -60,7 +60,7 @@
 - `:552` `process_data(with_fit=False)`。
 - `:633` `setup_data(init_type=IT_FIT_SEQ, **kwargs)`：`:650` `super().setup_data`；`:652-661` dispatch：`IT_FIT_IND`→`fit()`+`process_data()`；`IT_LS`→`process_data()`；`IT_FIT_SEQ`→`fit_process_data()`。`IT_*` 常量 `:629-631`。
 
-**泄漏边界**：`proc.fit(self._data)` 收全时间范围。防泄漏逐 processor 经 `fit_start_time`/`fit_end_time`，仅时序归一器遵守：`MinMaxNorm.fit`/`ZScoreNorm.fit`/`RobustZScoreNorm.fit`（`processor.py:204-218/238-252/281-288` `[未验证-上轮]`）。自定义带状态 `fit()` 且不切片 → 泄漏。
+**泄漏边界**：`proc.fit(self._data)` 收全时间范围。防泄漏逐 processor 经 `fit_start_time`/`fit_end_time`，仅时序归一器遵守：`MinMaxNorm.fit`/`ZScoreNorm.fit`/`RobustZScoreNorm.fit`（`processor.py:204-218/238-252/281-288` `[已自核]`）。自定义带状态 `fit()` 且不切片 → 泄漏。
 
 ### 1.7 Dataset 切片 —— `qlib/data/dataset/__init__.py` + handler `[已核实-子agent]`
 - `:185` `DatasetH.prepare(segments, col_set=CS_ALL, data_key=DK_I, **kwargs)`：`:229-230` 建 `seg_kwargs`；`:240` `return self._prepare_seg(self.segments[segments], **seg_kwargs)`；`:244` 多 seg list；`:247` pass-through slice。
@@ -160,7 +160,7 @@ grep `exchange.py` for `t+1|t1|today|bought|holding|day_count|settle` 仅两条�
 
 | 扩展 | 基类/钩子（file:line） | 如何接入 | 注册机制 |
 |---|---|---|---|
-| **custom_ops（自定义算子）** | `ExpressionOps`(`qlib/data/base.py`)；注册 `qlib/data/ops.py:1670` `register_all_ops`→`:1679-1680` `Operators.register(C.custom_ops)`；config `qlib/config.py:285` `"custom_ops": []`；触发 `qlib/config.py:490` `register_all_ops(self)` | 子类 `ExpressionOps`，实现 `_load_internal`/`get_longest_back_rolling`/`get_extended_window_size` + override `__str__`，传 `qlib.init(custom_ops=[YourOp])`。示例 `qlib/rl/data/integration.py:54` | `OpsWrapper.__getattr__`(`ops.py:1661` `[未验证-上轮]`) |
+| **custom_ops（自定义算子）** | `ExpressionOps`(`qlib/data/base.py`)；注册 `qlib/data/ops.py:1670` `register_all_ops`→`:1679-1680` `Operators.register(C.custom_ops)`；config `qlib/config.py:285` `"custom_ops": []`；触发 `qlib/config.py:490` `register_all_ops(self)` | 子类 `ExpressionOps`，实现 `_load_internal`/`get_longest_back_rolling`/`get_extended_window_size` + override `__str__`，传 `qlib.init(custom_ops=[YourOp])`。示例 `qlib/rl/data/integration.py:54` | `OpsWrapper.__getattr__`(`ops.py:1661` `[已自核]`) |
 | **processor** | `Processor`(`qlib/data/dataset/processor.py:35`) | 子类实现 `__call__`/`fit`/`is_for_infer`/`readonly`，在 `DataHandlerLP` `shared/infer/learn_processors`(`handler.py:510`) 用 `{"class":..,"module_path":..,"kwargs":..}` 引用 | `init_instance_by_config`(`qlib/utils/mod.py:122`) name-only 解析（须可从 `qlib.data.dataset.processor` import，否则给 `module_path`） |
 | **model** | `Model`(`qlib/model/base.py:22`，`fit :25`/`predict :62-63`)；`ModelFT`(`:81`，`finetune :84-85`) | 子类 `Model`/`ModelFT`，放 `{"class":..,"module_path":..}` 于 `task["model"]`；`_exe_task`(`trainer.py:45`) 用 `accept_types=Model` 实例化 | config 引用，无中央注册 |
 | **RecordTemp** | `RecordTemp`(`record_temp.py:28`，`generate`)；`ACRecordTemp`(`:212`，`_generate :240` abstract，`generate :219` 自动 check→_generate→save) | 子类实现 `generate`（或 `ACRecordTemp._generate` 返 artifact dict），加 config 到 `task["record"]` | `_exe_task`(`trainer.py:65-70`) `default_module="qlib.workflow.record_temp"` + `try_kwargs={"model","dataset"}` |

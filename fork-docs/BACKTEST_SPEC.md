@@ -65,6 +65,8 @@ annualized_return = (1 + cumulative_return) ** (N / len(r)) - 1
 max_drawdown = (cumulative_curve / cumulative_curve.cummax() - 1).min()   # 乘性回撤
 ```
 
+> **mode=product 登记（公式已核、未启用）** `[已自核]`：上式逐行亲核 `evaluate.py:70-80`，公式准确。**全链路无 caller 传 `mode=product`**（§2.1 grep 0 命中；`PortAnaRecord` 默认 sum）——当前采信口径全走 sum。若 fork 改用 product：年化 = CAGR `(1+cum_ret)**(N/len(r))-1`（N=238 日频），**非** sum 的 `mean*238` 单利；`max_drawdown` 改乘性。须显式传 `mode="product"`。
+
 ### 1.3 IR `:84`
 ```
 information_ratio = mean / std * np.sqrt(N)
@@ -143,9 +145,9 @@ information_ratio = mean / std * np.sqrt(N)
 - `cost_ratio`：SELL `self.close_cost + adj_cost_ratio`(`:895`)；BUY `self.open_cost + adj_cost_ratio`(`:920`)；impact 平方 `adj_cost_ratio = self.impact_cost * (trade_val/total_trade_val)**2`(`:892`)，`total_trade_val` falsy 时 `adj_cost_ratio = self.impact_cost`(`:890`)。
 - `trade_cost = max(trade_val * cost_ratio, self.min_cost)`(`:948`)；`trade_val <= 1e-5` 归零(`:949-951`)。
 - **`min_cost` 对称/全局**：单标量同施买卖（`max(...,self.min_cost)` 在 `:948` 及 SELL cash-floor `:912-916` / BUY cash `:923-928`），无 open/close min_cost。
-- **deal_price 静默回退 `$close`**：`exchange.py:510-513` `[未验证-上轮]` 配置价 NaN/`<=1e-8` 时 warn 后回退 `$close`——可掩盖缺数据。
+- **deal_price 静默回退 `$close`**：`exchange.py:510-513` `[已核实-子agent]` 配置价 NaN/`<=1e-8` 时 warn 后回退 `$close`——可掩盖缺数据。
 
-### 4.2 回报数字三层（Account）`[未验证-上轮，待 arch agent 复核行号]`
+### 4.2 回报数字三层（Account）`[已核实-子agent]`
 - `rtn`(accum_info.rtn) **不含成本**；`earning` **含成本**（`account.py:18-31`，`_update_state_from_order` `:183-201` 注 "do not consider cost"）。
 - `return_rate=(now_earning+now_cost)/last_account_value`(`account.py:283`)——报告 return 是 **gross of cost**，earning 是 **net**。
 - **读回报数字须分清 rtn/earning/return_rate。**

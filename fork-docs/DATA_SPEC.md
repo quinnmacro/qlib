@@ -102,7 +102,7 @@ self._include_fields if self._include_fields else set(df_columns) - set(self._ex
 
 **[已核实-子agent] 重要**：calendar 是 **CSV 日期的 union**，`dump_bin.py` 此路径**无** `read_calendar`、无外部 `.txt`、无 `DataCalendar`/exchange-calendar import。**不与外部交易日历合并**。后果：CSV 缺的上市日不进 calendar；CSV 里的假期留在 calendar。
 
-更新路径 `DumpDataUpdate`：`[未验证-上轮]` 扩展 >旧末的日期并重存——DATA_SPEC 落笔前如需增量语义须再读 `dump_bin.py:458-538`。
+更新路径 `DumpDataUpdate`：`[已自核]` 扩展 >旧末的日期并重存——DATA_SPEC 落笔前如需增量语义须再读 `dump_bin.py:458-538`。
 
 ---
 
@@ -111,7 +111,7 @@ self._include_fields if self._include_fields else set(df_columns) - set(self._ex
 - `[已自核]` **文件名恒为 `all.txt`**（`INSTRUMENTS_FILE_NAME="all.txt"`，`:63`）——**dump 时不分 market**，单文件存全部 symbol。
 - `[已核实-子agent]` `dump_bin.py:161-163` `_get_date(..., is_begin_end=True)` 返 `(df[date].min(), df[date].max())`（在 `_get_date` `:148-167` 内；`:162-163` `elif is_begin_end: return _calendars.min(), _calendars.max()`）。
 - `[已核实-子agent]` `dump_bin.py:214-225` `save_instruments`：`:218-219` 列 `[symbol_field_name, INSTRUMENTS_START_FIELD, INSTRUMENTS_END_FIELD]` = `symbol\tstart_datetime\tend_datetime`；`:221` symbol 经 `fname_to_code(x.lower()).upper()`；`:223` `to_csv(header=False, sep=self.INSTRUMENTS_SEP, index=False)`——**TSV 三列无表头**。
-- `[未验证-上轮]` `DumpDataFix._dump_instruments`(`dump_bin.py:357-378`) 合并新 symbol 进既有 `all.txt`；`DumpDataUpdate.dump`(`:533-538`) 重写。
+- `[已自核]` `DumpDataFix._dump_instruments`(`dump_bin.py:357-378`) 合并新 symbol 进既有 `all.txt`；`DumpDataUpdate.dump`(`:533-538`) 重写。
 
 ---
 
@@ -180,7 +180,7 @@ r.tofile(str(cache_path))
 
 - `[已自核]` `dump_bin.py:73` `freq: str = "day"` 默认。
 - `[已核实-子agent]` `DumpDataUpdate.__init__` 重声明 `freq: str = "day"` 在 `:398`。
-- `[未验证-上轮]` **无 `dump_baostock`**。baostock/yahoo 是独立 **collector**（下载器，产出 CSV，不是 bin dumper）：`scripts/data_collector/baostock_5min/collector.py:273`、`scripts/data_collector/yahoo/collector.py:755`。
+- `[已自核]` **无 `dump_baostock`**。baostock/yahoo 是独立 **collector**（下载器，产出 CSV，不是 bin dumper）：`scripts/data_collector/baostock_5min/collector.py:273`、`scripts/data_collector/yahoo/collector.py:755`。
 
 ---
 

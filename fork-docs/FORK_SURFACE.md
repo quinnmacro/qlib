@@ -1,7 +1,7 @@
 # FORK_SURFACE.md —— qlib fork 改动面与操作坑清单
 
 > 给"上下文被 clear 之后的我"看的 fork 改动面操作手册。不是介绍文。
-> 规则：每条论断可追溯到 `路径:行号`；`[已自核]` = 本轮亲自开文件核对；`[已自核-上轮]` = 上一轮侦察自核、本轮未重开但同 session 无 rebase 故行号有效；`[未验证]` = 仍待核，不可当事实。
+> 规则：每条论断可追溯到 `路径:行号`。`[已自核]` = 本轮主 agent 亲自开文件核对；`[已自核-上轮]` = 上一轮自核、本轮未重开但同 session 无 rebase 故行号有效；`[已核实-子agent]` = 本轮子 agent 开文件核对（主 agent 未亲核，信任度略低于 `[已自核]`）；`[未验证*]` = 仍待核，**不可当事实**；`[已推翻 → 见 …]` = 曾是结论、后被证伪，去指定处看正确结论。
 > 阅读顺序：本文件从最危险项排到最次要项。**第 1 条是 fork 改算子实现时最高危、且不报错**——先读它。
 
 ---
@@ -55,7 +55,7 @@ def _uri(self, instrument, field, start_time, end_time, freq):
     instrument = str(instrument).lower()
     return hash_args(instrument, field, freq)
 ```
-`hash_args` = `md5(json.dumps((instrument, field, freq), sort_keys=True, default=str))`（`qlib/utils/__init__.py:271-274` [未验证-上轮，子 agent 核中]）。**磁盘 key = `hash_args(instrument, field, freq)`**。`start_time`/`end_time` **在签名里但函数体丢弃**——全量 series 缓存一次，读时切片。
+`hash_args` = `md5(json.dumps((instrument, field, freq), sort_keys=True, default=str))`（`qlib/utils/__init__.py:271-274` `[已核实-子agent]`）。**磁盘 key = `hash_args(instrument, field, freq)`**。`start_time`/`end_time` **在签名里但函数体丢弃**——全量 series 缓存一次，读时切片。
 
 **(c) 磁盘读分支** —— `qlib/data/cache.py:518-533`：
 ```python
@@ -83,7 +83,7 @@ if clear_mem_cache:
 ```
 `H.clear()` 只清 `H["f"]/H["c"]/H["i"]` 内存；**不碰磁盘 `<provider_uri>/features_cache/`**。重跑 `qlib.init` 仍命中 stale 磁盘文件。
 
-**(f) `str(self)` 跨实现变化稳定——这就是 bug 的根** —— 各 `__str__` 纯结构（类名 + 子表达式串 + 构造参数），**绝不编码 `_load_internal` 体**：`Expression.__str__`=`type(self).__name__`(`base.py:26-27`)、`Feature.__str__`=`"$"+name`(`base.py:250-251`)、`Rolling.__str__`=`"{}({},{})".format(type(self).__name__, self.feature, self.N)`(`ops.py:739-740`)。故编辑 `Mean._load_internal` 不改 `Mean.__str__`=`"Mean($close,5)"` → key byte-identical → 旧 bin 返。`__str__` 行号 `[未验证-上轮，子 agent 核中]`。
+**(f) `str(self)` 跨实现变化稳定——这就是 bug 的根** —— 各 `__str__` 纯结构（类名 + 子表达式串 + 构造参数），**绝不编码 `_load_internal` 体**：`Expression.__str__`=`type(self).__name__`(`base.py:26-27`)、`Feature.__str__`=`"$"+name`(`base.py:250-251`)、`Rolling.__str__`=`"{}({},{})".format(type(self).__name__, self.feature, self.N)`(`ops.py:739-740`)。故编辑 `Mean._load_internal` 不改 `Mean.__str__`=`"Mean($close,5)"` → key byte-identical → 旧 bin 返。`__str__` 行号 `[已自核]`。
 
 **(g) 仅复合表达式落磁盘；裸 Feature 不落磁盘** —— `qlib/data/cache.py:562-564`：
 ```python
@@ -103,7 +103,7 @@ else:
 
 - **内存** `H["f"]`(`base.py:187`)：单进程内直到 `qlib.init`/LRU 驱逐；`qlib.init` 清之（`__init__.py:56`）。
 - **磁盘** `DiskExpressionCache`(`cache.py:505`)：**不被 `qlib.init` 清**，跨进程持久；改实现后任何命中 `.meta` 的 load 都返旧值。
-- **dataset 缓存** 同病：`DiskDatasetCache._uri`(`cache.py:655-657`) key = `hash_args(norm_inst, norm_fields, freq, disk_cache, inst_processors)`，`fields` 是 DSL 串列表——改算子实现同样 stale。dataset 缓存有 per-call `disk_cache=0` bypass（`cache.py:402-406` 等 `[已核实-子agent]`），**表达式缓存无此等价物**。
+- **dataset 缓存** 同病（本轮亲核 `[已自核]`）：`DiskDatasetCache._uri`(`cache.py:656`) key = `hash_args(instruments, fields, freq, disk_cache, inst_processors)`，`fields` 是 DSL 串列表——改算子实现同样 stale。per-call `disk_cache=0` bypass 在 `DiskDatasetCache._dataset`(`cache.py:699-703` `if disk_cache==0: return self.provider.dataset(...)`)，**表达式缓存无此等价物**。`gen_dataset_cache`(`cache.py:857`) 在 `:904` 调 `clear_cache`——同 expression 的 `:575`，只在缓存已启用的 miss 分支(`:736-739`)跑。**数据集缓存存 `D.features` 结果（pre-processor，`loader.py:223`）；processor 在 handler 内存跑（`handler.py:194`→`:519`），改 processor 不咬此缓存，改算子咬。**
 
 ### 1.4 rebase 风险
 
@@ -114,7 +114,7 @@ else:
 - **无 API flag** 强制重算：无 `recompute`/`disable_cache`/`refresh`/版本 bump（meta 无版本列，`cache.py:570-573` `[已自核]`）。
 - **手动删磁盘**：删 `<provider_uri>/features_cache/`（整树）或具体 `<instrument>/<hash>` + `.meta`。`BaseProviderCache.clear_cache`(`cache.py:313-321` `[已核实-子agent]`) 删单条但未接 user-facing refresh 调用——须手动 `rm -rf` 或手动调。删后 `check_cache_exists` 返 False → `gen_expression_cache`(`cache.py:551,:566`) 用新实现重算。
 - **整体禁用（旁路，非清除）** `[已自核]`：`qlib.init(expression_cache=None)` → `data.py:1320` 为 False → `DiskExpressionCache` **根本不实例化**（不是 `ExpressionCache.expression`(`cache.py:343-346`) 抛 `NotImplementedError` 回退 `provider.expression`——那是缓存实例已存在但 `_expression` 未实现时的回退路径，禁用时不触发）。原始 `LocalExpressionProvider` 直连，本次 session 不读不写磁盘、当场重算。**但 stale `.bin` 原样留存**：唯一删文件的代码 `clear_cache`(`cache.py:313-321`) 只在 `gen_expression_cache`(`cache.py:575`) 内调用，而后者只在缓存**已启用**的 miss 分支(`cache.py:538/551`)执行——禁用时整段不跑。故"跑一遍重算后再开缓存"**不安全**：再开即 `cache.py:518` 命中旧 `.meta` 静默复用。要恢复缓存须**先删 `features_cache/`**。
-- **dataset bypass**：`disk_cache=0` 或 `qlib.init(dataset_cache=None)`；**表达式缓存无 `disk_cache=0` 等价物**。
+- **dataset bypass（旁路，非清除）** `[已自核]`：per-call `disk_cache=0`(`cache.py:699-703`) 或 `qlib.init(dataset_cache=None)`(`data.py:1326` False → `DiskDatasetCache` 不实例化)——都仅旁路本次调用/session、**不删** stale dataset bin（`clear_cache` 只在 `gen_dataset_cache:904` 跑）；重启用即 `cache.py:725` `check_cache_exists` 命中旧缓存静默复用。要恢复须**先删 `<C.dataset_cache_dir_name>/`**。表达式缓存无 `disk_cache=0` 等价物。
 - **`qlib.init()` 单独不够**：只清内存不清磁盘（`__init__.py:56` `[已自核-上轮]`）。
 - **代价**：纪律成本——每次改复合算子 `_load_internal` 后必须手动清 `features_cache/`，否则新代码不执行且无任何告警。建议在 fork 的开发流程里加 pre-run hook 或 wrapper 强制清。
 
@@ -139,7 +139,7 @@ else:
 
 中文标点 regex `chinese_punctuation_regex = r"、：（）"`（`:292`）。非 str 先 `str(field)`（`:285-286`），返回重写后字符串（`:302`）。`:282-283` TODO：`$close@5min` 频率语法**未实现**。
 
-eval 点：`qlib/data/data.py:397` `expression = eval(parse_field(field))`、`qlib/data/cache.py:543` `eval(parse_field(field))`——`[未验证-上轮，子 agent 核中]`。parse_field 不是 parser，是 regex 重写 + Python `eval`。
+eval 点：`qlib/data/data.py:397` `expression = eval(parse_field(field))`、`qlib/data/cache.py:543` `eval(parse_field(field))`——`[已核实-子agent]`。parse_field 不是 parser，是 regex 重写 + Python `eval`。
 
 ### 2.2 触发条件
 
