@@ -103,7 +103,7 @@ else:
 
 - **内存** `H["f"]`(`base.py:187`)：单进程内直到 `qlib.init`/LRU 驱逐；`qlib.init` 清之（`__init__.py:56`）。
 - **磁盘** `DiskExpressionCache`(`cache.py:505`)：**不被 `qlib.init` 清**，跨进程持久；改实现后任何命中 `.meta` 的 load 都返旧值。
-- **dataset 缓存** 同病：`DiskDatasetCache._uri`(`cache.py:655-657`) key = `hash_args(norm_inst, norm_fields, freq, disk_cache, inst_processors)`，`fields` 是 DSL 串列表——改算子实现同样 stale。dataset 缓存有 per-call `disk_cache=0` bypass（`cache.py:402-406` 等 `[未验证-上轮]`），**表达式缓存无此等价物**。
+- **dataset 缓存** 同病：`DiskDatasetCache._uri`(`cache.py:655-657`) key = `hash_args(norm_inst, norm_fields, freq, disk_cache, inst_processors)`，`fields` 是 DSL 串列表——改算子实现同样 stale。dataset 缓存有 per-call `disk_cache=0` bypass（`cache.py:402-406` 等 `[已核实-子agent]`），**表达式缓存无此等价物**。
 
 ### 1.4 rebase 风险
 
@@ -112,8 +112,8 @@ else:
 ### 1.5 能否绕过及代价
 
 - **无 API flag** 强制重算：无 `recompute`/`disable_cache`/`refresh`/版本 bump（meta 无版本列，`cache.py:570-573` `[已自核]`）。
-- **手动删磁盘**：删 `<provider_uri>/features_cache/`（整树）或具体 `<instrument>/<hash>` + `.meta`。`BaseProviderCache.clear_cache`(`cache.py:313-321` `[未验证-上轮]`) 删单条但未接 user-facing refresh 调用——须手动 `rm -rf` 或手动调。删后 `check_cache_exists` 返 False → `gen_expression_cache`(`cache.py:551,:566`) 用新实现重算。
-- **整体禁用**：`qlib.init(expression_cache=None)` → `ExpressionCache.expression`(`cache.py:343-346` `[未验证-上轮]`) raise `NotImplementedError` 回退 `self.provider.expression(...)`，不读不写磁盘。跑一遍重算后再开。
+- **手动删磁盘**：删 `<provider_uri>/features_cache/`（整树）或具体 `<instrument>/<hash>` + `.meta`。`BaseProviderCache.clear_cache`(`cache.py:313-321` `[已核实-子agent]`) 删单条但未接 user-facing refresh 调用——须手动 `rm -rf` 或手动调。删后 `check_cache_exists` 返 False → `gen_expression_cache`(`cache.py:551,:566`) 用新实现重算。
+- **整体禁用（旁路，非清除）** `[已自核]`：`qlib.init(expression_cache=None)` → `data.py:1320` 为 False → `DiskExpressionCache` **根本不实例化**（不是 `ExpressionCache.expression`(`cache.py:343-346`) 抛 `NotImplementedError` 回退 `provider.expression`——那是缓存实例已存在但 `_expression` 未实现时的回退路径，禁用时不触发）。原始 `LocalExpressionProvider` 直连，本次 session 不读不写磁盘、当场重算。**但 stale `.bin` 原样留存**：唯一删文件的代码 `clear_cache`(`cache.py:313-321`) 只在 `gen_expression_cache`(`cache.py:575`) 内调用，而后者只在缓存**已启用**的 miss 分支(`cache.py:538/551`)执行——禁用时整段不跑。故"跑一遍重算后再开缓存"**不安全**：再开即 `cache.py:518` 命中旧 `.meta` 静默复用。要恢复缓存须**先删 `features_cache/`**。
 - **dataset bypass**：`disk_cache=0` 或 `qlib.init(dataset_cache=None)`；**表达式缓存无 `disk_cache=0` 等价物**。
 - **`qlib.init()` 单独不够**：只清内存不清磁盘（`__init__.py:56` `[已自核-上轮]`）。
 - **代价**：纪律成本——每次改复合算子 `_load_internal` 后必须手动清 `features_cache/`，否则新代码不执行且无任何告警。建议在 fork 的开发流程里加 pre-run hook 或 wrapper 强制清。
@@ -121,8 +121,8 @@ else:
 ### 1.6 行动守则（红线）
 
 > 改任何**复合算子** `_load_internal`（或 DSL 串不捕获的代码）后：
-> 1. 手动删 `<provider_uri>/features_cache/`（用 dataset 缓存则还有 `<C.dataset_cache_dir_name>/`，默认见 `qlib/config.py`）；
-> 2. 或 `qlib.init(expression_cache=None, dataset_cache=None)` 跑一遍重算后再开缓存；
+> 1. 手动删 `<provider_uri>/features_cache/`（用 dataset 缓存则还有 `<C.dataset_cache_dir_name>/`，默认见 `qlib/config.py`）——**唯一可靠清除**；
+> 2. `qlib.init(expression_cache=None, dataset_cache=None)` 仅**旁路本次 session**（`data.py:1320` False → 不实例化 `DiskExpressionCache`），**不删** stale `.bin`；仅在删过 `features_cache/` 之后、或永不再开缓存时才安全，**不能代替删文件**；
 > 3. **`qlib.init()` 单独不清磁盘**——不要以为重 init 就够了。
 > 4. 裸 `$close` 改 load 不咬磁盘（只咬内存，`qlib.init` 清），但复合算子（`Mean`/`Std`/`Ref`/`Rank`/...）改实现必清。
 
@@ -156,7 +156,7 @@ eval 点：`qlib/data/data.py:397` `expression = eval(parse_field(field))`、`ql
 
 ### 2.5 能否绕过及代价
 
-- 加新算子名——能绕过：`custom_ops`（`qlib/config.py:282-285` `[未验证-上轮]`）或 `qlib.init(custom_ops=[...])`，子类 `ExpressionOps` 并实现四方法 + override `__str__`，不改源。
+- 加新算子名——能绕过：`custom_ops`（`qlib/config.py:282-285` `[已核实-子agent]`）或 `qlib.init(custom_ops=[...])`，子类 `ExpressionOps` 并实现四方法 + override `__str__`，不改源。
 - 加新词法——**不能绕过**，必须改 regex。fork 须 patch `qlib/utils/__init__.py:277-302`，并同步 `data.py:397`/`cache.py:543` 的 eval 作用域。
 - **安全红线**：eval 字段串 = 可执行 Python，任意 Python 会在 field 字符串里执行（仅 `NameError`/`SyntaxError` 是 parse 错）。**外部/模型生成的字段串不许直接喂 `D.features`**。
 
@@ -225,13 +225,13 @@ eval 点：`qlib/data/data.py:397` `expression = eval(parse_field(field))`、`ql
 
 ## 5. bin dtype 硬编码 float32 + 强制 cast
 
-> 写侧 `[已核实-子agent]`（dump_bin + file_storage）；读侧 cast `[未验证-上轮]`（`data.py:868-870` FIXME，架构子 agent 覆盖 `data.py:843` expression 但未核 cast 行）。
+> 写侧 `[已核实-子agent]`（dump_bin + file_storage）；读侧 cast `[已核实-子agent]`（FIXME 注释 `data.py:868-870`，实际 cast `series.astype(np.float32)` 在 `:872`，try/except 吞 `ValueError`/`TypeError`）。
 
 ### 5.1 位置
 
 - `qlib/data/storage/file_storage.py` `[已核实-子agent]`：`FileFeatureStorage.__getitem__`(`:346-375`) 经 `:372` `np.frombuffer` 读裸 `<f` float32 字节返 `pd.Series`；`FileFeatureStorage.write`(`:299-329`) 写裸值。**读侧硬编码 float32，无 dtype 配置。**
 - `scripts/dump_bin.py:269` `[已自核]` `np.hstack([date_index, _df[field]]).astype("<f").tofile(...)`——dump 侧 float32。
-- `qlib/data/data.py:868-870` `[未验证-上轮]` `LocalExpressionProvider.expression` 强制 cast float32（带 `# FIXME`）——读侧 cast。`expression` 本体定义在 `:843` `[已核实-子agent]`。
+- `qlib/data/data.py:868-870` FIXME（实际 cast `series.astype(np.float32)` 在 `:872`，try/except 吞 `ValueError`/`TypeError`）`[已核实-子agent]`——`LocalExpressionProvider.expression` 读侧强 cast float32。`expression` 本体定义在 `:843` `[已核实-子agent]`。
 
 ### 5.2 触发条件
 
@@ -239,7 +239,7 @@ eval 点：`qlib/data/data.py:397` `expression = eval(parse_field(field))`、`ql
 
 ### 5.3 影响半径
 
-改 bin dtype 须**同时**改 `FileFeatureStorage` 读写与 `LocalExpressionProvider` cast 与 `dump_bin.py` cast——**只改一处不够**（`data.py:868-870` FIXME 承认）。
+改 bin dtype 须**同时**改 `FileFeatureStorage` 读写与 `LocalExpressionProvider` cast 与 `dump_bin.py` cast——**只改一处不够**（`data.py:868-870` FIXME 承认，实际 cast 在 `:872` `[已核实-子agent]`）。
 
 ### 5.4 rebase 风险
 
@@ -255,7 +255,7 @@ eval 点：`qlib/data/data.py:397` `expression = eval(parse_field(field))`、`ql
 ## 附录：非"必动核心"但需记的操作坑
 
 - **`min_cost` 对称/全局**：`exchange.py` 单标量同施买卖(`:912,925,929,948` `[已核实-子agent]`)，无 open/close min_cost。
-- **`deal_price` 静默回退 `$close`**：`exchange.py:510-513` `[未验证-上轮]` 配置价 NaN/`<=1e-8` 时 warn 后回退 `$close`——可掩盖缺数据。
-- **`trade_w_adj_price` 在 `$factor` NaN 时静默变**：`exchange.py:222-232` `[未验证-上轮]` → 整手 rounding 静默禁用。
-- **`return_rate` gross of cost vs `earning` net**：`account.py:18-31,283` `[未验证-上轮]`——读回报数字须分清 rtn/earning/return_rate。
-- **`generate_order_for_target_amount_position`** `random.seed(0)` 硬编码(`exchange.py:638-639` `[未验证-上轮]`)。
+- **`deal_price` 静默回退 `$close`** `[已核实-子agent]`：`exchange.py:510-513`，触发条件 `deal_price is None or np.isnan(deal_price) or deal_price <= 1e-08`（比"NaN"宽——含 `None` 与近零）→ warn 后回退 `get_close`(`$close`)——可掩盖缺数据。
+- **`trade_w_adj_price` 在 `$factor` NaN 时静默变** `[已核实-子agent]`：`exchange.py:222-232`，是**布尔实例属性**（非方法，`:225`/`:232` 赋值）；`$factor` 含 NaN 而 `$close` 非空 → True，整手 rounding 静默禁用。
+- **`return_rate` gross of cost vs `earning` net** `[已核实-子agent]`：rtn/earning docstring `account.py:18-31`（rtn 不含成本；`earning = rtn - cost`）；`return_rate=(now_earning+now_cost)/last_account_value`(`account.py:283`，gross of cost 加回成本)——读回报数字须分清 rtn/earning/return_rate。
+- **`generate_order_for_target_amount_position`** `random.seed(0)` 硬编码 `[已核实-子agent]`(`exchange.py:638-639`)。

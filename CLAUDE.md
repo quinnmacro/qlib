@@ -70,7 +70,7 @@ qlib 扩展靠**继承 + 配置引用**（非装饰器/钩子），统一漏斗 
 fork 改动尽量**子类化/配置化**而非 inline patch（`handler.py`/`record_temp.py`/`exchange.py`/`file_storage.py` 是 rebase 冲突高发区，见 `fork-docs/FORK_SURFACE.md §0.1`）。
 
 ## 红线（不可越过）
-1. **改算子实现后未清 `features_cache` 一律视为结果无效**——cache key=`str(self)`（`base.py:187`）+ 磁盘 `hash_args`（`cache.py:502`）都不含实现 hash，`__str__` 不变 → 静默跑旧 bin。清 `<provider_uri>/features_cache/` 或 `qlib.init(expression_cache=None)` 重算；`qlib.init()` 单独**不清磁盘**。
+1. **改算子实现后未清 `features_cache` 一律视为结果无效**——cache key=`str(self)`（`base.py:187`）+ 磁盘 `hash_args`（`cache.py:502`）都不含实现 hash，`__str__` 不变 → 静默跑旧 bin。**唯一可靠修复 = 手动删 `<provider_uri>/features_cache/`**（或对应 instrument 子目录）。`qlib.init(expression_cache=None)` 仅**旁路本次 session**——`data.py:1320` 为 False → `DiskExpressionCache` 根本不实例化（不读不写、当场重算），**不删** stale `.bin`；下次重启用缓存 `cache.py:518` 仍命中旧 `.meta` 静默复用。**两者不等价**——勿用 `expression_cache=None` 代替删文件。
 2. **任何回测数字出现在结论里必须标注是哪个函数算的**——`risk_analysis` sum 模式 → 238 单利；`SigAnaRecord` long-short → 252；`evaluate_portfolio` → 250（弃用）。**ICIR（`record_temp.py:326`）无 √N，IR（`evaluate.py:84`）有 √N，同名不同口径，同页必须标注。**
 3. **字段串经 `parse_field` → `eval()`（`data.py:397`）= 可执行 Python。外部/模型生成的字段串不许直接进 `D.features`。**
 4. **自定义带状态 `fit()` 的 processor 必须显式设 `fit_start_time`/`fit_end_time`** 并在 `fit()` 里 `fetch_df_by_index(slice(...))` 切片（`processor.py:239/282/205`）——否则泄漏（`handler.py:519` 在全 raw `_data` 上调 fit）。截面 processor（CSZScoreNorm/CSRankNorm）例外。

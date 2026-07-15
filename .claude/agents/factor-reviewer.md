@@ -30,7 +30,7 @@ tools: Read, Grep, Glob, Bash, TodoWrite
 
 ### 3. custom_ops 变更后缓存是否失效（静默旧 bin）—— 锁定
 - **机制**：`Expression.load` cache key = `str(self), instrument, start_index, end_index, *args`（`qlib/data/base.py:187`），磁盘 key = `hash_args(instrument, field, freq)`（`qlib/data/cache.py:502-505`），**都不含算子实现 hash / class 身份 / 版本**。`__str__` 纯结构（`ops.py:54` 等），改 `_load_internal` 体**不改 `__str__`** → key byte-identical → `.meta` 命中（`cache.py:518-533`）直接返旧 series，新代码不执行。`qlib.init()` 只清内存不清磁盘（`__init__.py:54-56`）。
-- **FAIL 条件**：改了复合算子（DSL 串捕获的 `Mean`/`Std`/`Ref`/`Rank`/自定义 op，**非裸 `$close`**）`_load_internal` 而没清 `<provider_uri>/features_cache/`（也没 `qlib.init(expression_cache=None)` 重算）→ 结果无效。
+- **FAIL 条件**：改了复合算子（DSL 串捕获的 `Mean`/`Std`/`Ref`/`Rank`/自定义 op，**非裸 `$close`**）`_load_internal` 而没**删** `<provider_uri>/features_cache/` → 结果无效。注：`qlib.init(expression_cache=None)` 只**旁路本次 session**（`data.py:1320` False → `DiskExpressionCache` 不实例化，不读不写、当场重算），**不删** stale `.bin`，重启用缓存即复现——**不算清除**，不能替代删文件。
 - 修复：见 `qlib-data-ops` skill 缓存失效 checklist / `fork-docs/FORK_SURFACE.md §1.6`。
 
 ### 4. 其他（逐条过，FAIL 标注）

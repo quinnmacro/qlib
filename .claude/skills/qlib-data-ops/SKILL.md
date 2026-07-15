@@ -23,8 +23,7 @@ qlib 数据层操作手册。本 skill 只给**操作步骤 + 命令 + 坑**；�
 - [ ] 2. 手动删磁盘缓存整树：`<provider_uri>/features_cache/`。若用了 dataset 缓存，再删 `<provider_uri>/<dataset_cache_dir_name>/`（默认目录名见 `qlib/config.py`）。
       - Windows / PowerShell：`Remove-Item -Recurse -Force <provider_uri>\features_cache`
       - POSIX：`rm -rf <provider_uri>/features_cache`
-- [ ] 3. 或者（替代 2）：不开磁盘表达式缓存跑一遍重算，再开回来：
-      `qlib.init(provider_uri=..., expression_cache=None, dataset_cache=None)` → 跑一次 → 再恢复 `expression_cache={"class":..., "module_path":...}`。
+- [ ] 3. **`qlib.init(expression_cache=None)` 只是旁路、不是清除——不能替代删文件**：`data.py:1320` 为 False → `DiskExpressionCache` 根本不实例化，本次 session 不读不写、当场重算；但 stale `.bin` **原样留存**，下次重启用缓存（`cache.py:518` 命中旧 `.meta`）又静默复用旧值。仅在"删过 `features_cache/` 之后"或"永不再开缓存"时才安全；若要恢复缓存，**先删 `features_cache/`**。
 - [ ] 4. **`qlib.init()` 单独不够**——`qlib/__init__.py:54-56` 的 `clear_mem_cache` 只清内存 `H["f"]`，**不碰磁盘** `features_cache/`。重 init 仍命中 stale 磁盘。
 - [ ] 5. 验证清掉：重跑后 `str(expr)` 不变但结果数值变了 → 清成功；若数值仍旧 → 缓存还在。
 - [ ] 6. 裸 `$close` 改 load 只咬内存（`qlib.init` 清），不咬磁盘——但为安全**统一清**。

@@ -75,7 +75,7 @@ df = D.features(instruments=D.instruments("csi300"), fields=["MyOp($close,5)"],
 - 组合 `information_ratio` = `mean/std*sqrt(238)`（`evaluate.py:84`）——**有 √N**。两者**同名不同口径**，同页必须标注。
 
 ## 常见坑
-- **改算子实现不清缓存 → 静默跑旧 bin**：`__str__` 不变 → cache key 不变（`base.py:187`），新 `_load_internal` 不执行。清 `features_cache/` 或 `qlib.init(expression_cache=None)` 重算。详见 `qlib-data-ops` skill 的 checklist / `fork-docs/FORK_SURFACE.md §1`。
+- **改算子实现不清缓存 → 静默跑旧 bin**：`__str__` 不变 → cache key 不变（`base.py:187`），新 `_load_internal` 不执行。**唯一可靠修复 = 手动删 `features_cache/`**；`qlib.init(expression_cache=None)` 只旁路本次 session、不删 stale `.bin`（`data.py:1320` 为 False → `DiskExpressionCache` 不实例化），重启用即复现——**不等价**于删文件。详见 `qlib-data-ops` skill 的 checklist / `fork-docs/FORK_SURFACE.md §1`。
 - **`__str__` 不稳定或不往返** → cache key 漂移 / `parse_field`→`eval` 解析失败。`__str__` 必须纯结构、可重解析。
 - **field 串经 `parse_field` → `eval()` = 可执行 Python**（`data.py:397`）：外部 / 模型生成的 field 串**不许直接进 `D.features`**（安全红线，`fork-docs/FORK_SURFACE.md §2.5`）。
 - **rolling 在样本边界 min_periods=1 静默错值**：见 factor-reviewer 清单第 2 条——算子 `_load_internal` 在窗口不足处应产 NaN，别用默认 `min_periods=1` 偷渡错值。
