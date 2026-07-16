@@ -44,14 +44,33 @@ fork-docs/     # 架构 / fork 面 / 数据 / 回测口径 / 废弃研究笔记
 | `qlib/contrib/strategy/signal_strategy.py` | TopkDropoutStrategy / T+1 策略层近似（`:75`,`:242`） |
 | `scripts/dump_bin.py` | bin 产出唯一入口（`:541`） |
 
-## 环境与常用命令
+## 环境与常用命令（实测，2026-07）
+
+**Python 必须 3.11，不能 3.13**——根因：`setup.py` 不调 `cythonize()`，靠 setuptools 自动转译 `.pyx`；py3.13 下 `Cython.Compiler.Main` 导入破裂 → setuptools `build_ext` 的 `try/except ImportError`（`setuptools/command/build_ext.py:26-34`）回退到 `distutils.command.build_ext` → `error: unknown file type '.pyx'`。`--no-build-isolation` + 装 Cython + legacy `setup.py build_ext` 三路全失败；切 3.11 一次装通。**别"再试一次 py3.13"白烧一小时。**
+
 ```bash
-# 跑 workflow 回测
-qrun <workflow.yaml>
+# 环境（conda-forge，无 Anaconda ToS）
+conda create -n qlib --override-channels -c conda-forge python=3.11 -y
+conda activate qlib   # 或直接用全路径 python: C:/Users/Q/miniconda3/envs/qlib/python.exe
+pip install -e ".[dev]"
+# 装完必核 import 指向工作区（装错则改动静默不生效，与 stale cache 同类静默失败）：
+python -c "import qlib; print(qlib.__file__)"   # 必须输出 c:\Users\Q\Code\qlib\qlib\__init__.py
+# 编译产物自检（存在才算 Cython 扩展装通）：
+ls qlib/data/_libs/rolling.cp311-win_amd64.pyd qlib/data/_libs/expanding.cp311-win_amd64.pyd
+# 跑 workflow 回测（mlflow 3.x 弃用 file-store，须放行）
+MLFLOW_ALLOW_FILE_STORE=true qrun examples/benchmarks/LightGBM/workflow_config_lightgbm_Alpha158.yaml
 # 灌自有 CSV → bin（唯一入口；单合并 CSV 用 dump_update 非 dump_all）
 python scripts/dump_bin.py dump_all --data_path <csv_dir> --qlib_dir <provider_uri> --freq day
 # 程序内初始化（开发期建议关磁盘缓存避免 stale）
 qlib.init(provider_uri="~/.qlib/qlib_data/cn_data", expression_cache=None)
+```
+
+**数据源**：官方数据集停用，用社区 `chenditc/investment_data`。Windows 下 curl 需 `--ssl-no-revoke`（Schannel 吊销检查 `CRYPT_E_REVOCATION_OFFLINE`，anaconda.com 链尤其触发；github.com 一般不触发）：
+
+```bash
+curl --ssl-no-revoke -L -o /tmp/qlib_bin.tar.gz https://github.com/chenditc/investment_data/releases/latest/download/qlib_bin.tar.gz
+mkdir -p ~/.qlib/qlib_data/cn_data && tar -xzf /tmp/qlib_bin.tar.gz -C ~/.qlib/qlib_data/cn_data --strip-components=1
+python scripts/check_data_health.py check_data --qlib_dir ~/.qlib/qlib_data/cn_data
 ```
 工具：本仓 `.claude/` 下有 skills（`qlib-data-ops`/`factor-research`/`backtest-analysis`）、agents（`qlib-explorer` 只读定位 / `factor-reviewer` 审查清单）、commands（`/new-factor`/`/run-backtest`）。
 
