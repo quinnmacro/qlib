@@ -67,6 +67,8 @@ qlib.init(provider_uri="~/.qlib/qlib_data/cn_data", expression_cache=None)  # �
 df = D.features(instruments=D.instruments("csi300"), fields=["MyOp($close,5)"],
                 start_time="2018-01-01", end_time="2024-12-31", freq="day")
 ```
+**cache 默认与启用（经验 2026-07，见 `fork-docs/FORK_SURFACE.md §1.7`）**：client 模式（默认 `default_conf="client"`）下 `expression_cache` 基线已 `None`（`config.py:156`+client 块无该键）→ **cache 默认 OFF**，无需显式传 `None`。要**启用**磁盘缓存须 `expression_cache="DiskExpressionCache"`，且 `DiskExpressionCache` 写锁**依赖 redis**（`config.py:478`：redis 连不上则带 WARNING 静默禁用，cache 不生效、不写 bin）；`DiskDatasetCache` 依赖 `pytables`（`pip install tables`，core 不含）。启用前先起 `redis-server`。
+**Windows 多标的 hang**：`D.features` 跨多 instrument 用 joblib `multiprocessing`（`config.py:168`），Windows spawn 重导入主模块 → hang。脚本须 `if __name__=="__main__":` 守卫 + `freeze_support()`，或 `qlib.init(..., kernels=1)` 强制串行（多标的 IC 评估推荐 `kernels=1`）。
 
 ### Step 5 IC / ICIR 评估
 经 `SigAnaRecord`（`qlib/workflow/record_temp.py`）→ `calc_ic`（`qlib/contrib/eva/alpha.py:160-183`）。口径**必查** `fork-docs/BACKTEST_SPEC.md §0 裁决表 + §3`：
@@ -74,11 +76,13 @@ df = D.features(instruments=D.instruments("csi300"), fields=["MyOp($close,5)"],
 - **ICIR** = `ic.mean() / ic.std()`（`record_temp.py:326`）——**无 √N，不年化**。
 - 组合 `information_ratio` = `mean/std*sqrt(238)`（`evaluate.py:84`）——**有 √N**。两者**同名不同口径**，同页必须标注。
 
+**轻量评估（不走 full workflow）**：快速因子筛选可直接调 `calc_ic(pred, label)`（`qlib/contrib/eva/alpha.py`）——`pred`/`label` 为单列 `DataFrame`（MultiIndex `(datetime, instrument)`），返 `(ic, ric)` 两按日 Series；`ic.mean()`/`ic.std()` 即 IC/ICIR（与 `SigAnaRecord` 同函数同口径）。label 常用 `Ref($close,-1)/$close-1`（次日收益）。Windows 多标的记得 `kernels=1`（见 Step 4）。
+
 ## 常见坑
 - **改算子实现不清缓存 → 静默跑旧 bin**：`__str__` 不变 → cache key 不变（`base.py:187`），新 `_load_internal` 不执行。**唯一可靠修复 = 手动删 `features_cache/`**；`qlib.init(expression_cache=None)` 只旁路本次 session、不删 stale `.bin`（`data.py:1320` 为 False → `DiskExpressionCache` 不实例化），重启用即复现——**不等价**于删文件。详见 `qlib-data-ops` skill 的 checklist / `fork-docs/FORK_SURFACE.md §1`。
 - **`__str__` 不稳定或不往返** → cache key 漂移 / `parse_field`→`eval` 解析失败。`__str__` 必须纯结构、可重解析。
 - **field 串经 `parse_field` → `eval()` = 可执行 Python**（`data.py:397`）：外部 / 模型生成的 field 串**不许直接进 `D.features`**（安全红线，`fork-docs/FORK_SURFACE.md §2.5`）。
-- **rolling 在样本边界 min_periods=1 静默错值**：见 factor-reviewer 清单第 2 条——算子 `_load_internal` 在窗口不足处应产 NaN，别用默认 `min_periods=1` 偷渡错值。
+- **rolling 在样本边界 min_periods=1 静默错值**：见 factor-reviewer 清单第 2 条——pandas `.rolling(N).mean()/.std()` 默认 `min_periods=window`（**不是** 1，默认即在窗口不足处产 NaN，正确）；坑在显式传 `min_periods=1` 偷渡错值。**注意 qlib 引擎按 `get_extended_window_size` 预扩张左窗取数后 trim**——故请求范围内**通常 0 边界 NaN**（NaN 在请求起点之前，被扩张取数消化）；边界 NaN 只在该 symbol **无更早历史**时出现。算子 `_load_internal` 不应显式设 `min_periods=1`。
 - **复权**：要原始价用 `$close/$factor`，qlib 读层不自动复权（`fork-docs/DATA_SPEC.md §7`）。
 
 ## 红线

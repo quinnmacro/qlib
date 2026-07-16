@@ -174,6 +174,18 @@ r.tofile(str(cache_path))
 
 **结论**：qlib 的 storage/读路径把 `.bin` 特征值当不透明裸 float，**读时绝不施加任何价格复权**（dump_bin/file_storage/data.py grep `adj|factor|adjust` 全 0 命中）。复权语义见官方 `docs/component/data.rst:55-56,195`：`factor = adjusted_price / original_price`，qlib 在 **collector 产出 CSV** 时将价格归一（首交易日归 1）并写 `factor` 列；`dump_bin.py` 原样 dump 该列（§1.5 全数值列 dump），读层裸读为 `$factor`。**用户在表达式层显式写 `$close / $factor` 取原始价**（`original = adjusted / factor`；~~`$close * $factor`~~ 方向错）。qlib 读层不自动施加复权——推翻上轮"load 时用 `$factor` 事后复权"推断（见 `_RESEARCH_NOTES.md` §11.1）。
 
+### 7.1 chinditc 社区数据复权实证 `[已经验复现]` 2026-07（6118 symbols，numpy 直读 bin）
+
+对 chinditc/investment_data 社区数据（`~/.qlib/qlib_data/cn_data`）逐字段实证，确认 §7 的读层结论 + 补全字段语义：
+
+- **`close` = 后复权相对价，IPO 归 1**：`close[0] = 1.0` 对**全部 6118 只**股票成立（p1=p99=1.0）——即首交易日锚定（后复权）。`close[-1]` median 1.36（相对数，非真实价）。
+- **`adjclose` = 后复权绝对价**：`adjclose[0]` median 25.07 = 真实 IPO 价（4.5–294 yuan 区间，合理）；`adjclose[-1]` p99=1375 = 累计复权远超名义价（长上市+分红的backward累积）。`adjclose = close × adjclose[0]`。
+- **后复权（非前复权）决定性判据**：`close[0]=1.0`（首日锚定）；`factor[-1]` 全样本**无一是 1.0**（median 0.125，min 0.001，max 49.18）→ 最新日非锚定 → **后复权**。前复权会是 `close[-1]` 归 1 / `factor[-1]=1.0`，均不成立。
+- **`factor` = close/nominal = adjusted/original**：10送10 split 上 `factor` 翻倍（sh600005 2004-10-18：0.3094→0.6186）。`$close/$factor` = 名义价（§7 结论确认）——sh600005 split 前后 7.52→3.80（减半，名义价应有的 split 行为），而 `close`/`adjclose` 均连续不减半（后复权应有的连续行为）。
+- **`$volume` = raw_volume / factor（非原始量，非 ×factor）**：10送10 split 上 `volume` 不翻倍（sh600005 509857→194615，非 2×；aggregate 11284 个 split 日 median vo_r=0.86，远非 2.0）。决定性证据：`volume × factor` 恢复 raw（split 上 ~2×，509857×0.3094=157757 → 1051646×0.619=650962，share-count 翻倍），`volume / factor` 连续。即 `volume = raw_volume / factor`（向下调，守恒 turnover = adjclose × volume = nominal_price × raw_volume）。
+
+**因子研究后果**：后复权下，**最新日 `adjclose` ≠ 当时可见名义价**（累计高于名义），历史 `adjclose` 对早期≈名义（少 corp action）。任何依赖**绝对价格水平**（价格阈值筛选）或**成交量绝对值**的因子，须显式说明复权假设——绝对阈值会在后复权尺度上随时间漂移。`exchange.py` 的 `$change ±0.095` 涨跌停用后复权 `close`（连续，split 不误触 0.095）——正确；`trade_w_adj_price` 同理。复现脚本 `.claude/ops/scan_adjust.py`、`scan_window.py`。
+
 ---
 
 ## 8. freq 与变体

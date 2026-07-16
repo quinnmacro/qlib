@@ -124,7 +124,41 @@ else:
 > 1. 手动删 `<provider_uri>/features_cache/`（用 dataset 缓存则还有 `<C.dataset_cache_dir_name>/`，默认见 `qlib/config.py`）——**唯一可靠清除**；
 > 2. `qlib.init(expression_cache=None, dataset_cache=None)` 仅**旁路本次 session**（`data.py:1320` False → 不实例化 `DiskExpressionCache`），**不删** stale `.bin`；仅在删过 `features_cache/` 之后、或永不再开缓存时才安全，**不能代替删文件**；
 > 3. **`qlib.init()` 单独不清磁盘**——不要以为重 init 就够了。
-> 4. 裸 `$close` 改 load 不咬磁盘（只咬内存，`qlib.init` 清），但复合算子（`Mean`/`Std`/`Ref`/`Rank`/...）改实现必清。
+> 4. 裸 `$close` 改 load 不咬磁盘（只咬内存，`qlib.init` 清），但复合算子（`Mean`/`Std`/``Ref`/`Rank`/...）改实现必清。
+
+### 1.7 经验复现（re-runnable experiment）`[已经验复现]` 2026-07
+
+5 阶段协议，每阶段一个**新进程**（清空内存 `MemCache H`，强制走磁盘）。算子 `RollingZScore`（`.claude/ops/rolling_zscore.py`）带一个 `SCALE` 常量，`__str__="RollingZScore($close,20)"` **不含 SCALE**——改 SCALE 即"改 `_load_internal` 而 `__str__` 不变"，正是 §1.2 触发条件。
+
+**前提（本轮新发现，`[已经验复现]`）——stale 只在以下条件全部满足时才咬**：
+
+1. **client 模式默认 cache OFF**：`default_conf="client"`（默认）下 `expression_cache` 基线默认 `None`（`config.py:156`），且 client 配置块（`config.py:264-286`）**无 `expression_cache` 键** → 默认不开缓存。要启用须显式 `qlib.init(expression_cache="DiskExpressionCache")`。**即默认 dev 路径无 stale 风险**——§1.2 条件 #1 的"`expression_cache=<非None>`"在 client 默认下不成立。
+2. **`DiskExpressionCache` 依赖 redis**：写锁 `cache.py:502` `gen_expression_cache` 用 `python-redis-lock`。`config.py:465-478` 守卫：redis 连不上时**带 WARNING 静默禁用**（`"redis connection failed..., DiskExpressionCache will not be used!"`，`config.py:478`）→ cache 实际不生效、不写 bin。本机 redis 默认未跑，须先 `redis-server --port 6379`（本 fork 用 `redis-windows` cygwin build，见 `CLAUDE.md` 环境节）。
+3. **`DiskDatasetCache` 依赖 pytables**：`cache.py:917` 用 `pd.HDFStore` → `tables` 包，仅 `pyproject.toml` 的 `[client]` extra 含，core 装不含 → 缺则 `ImportError: Missing optional dependency 'pytables'`。须 `pip install tables`。
+
+**复现脚本**：`.claude/ops/stale_driver.sh`（表达式缓存）+ `stale_driver_ds.sh`（dataset 缓存），probe = `stale_probe.py`/`stale_probe_ds.py`，算子 = `rolling_zscore.py`。`sed` 在阶段间切 `SCALE` 1↔2，每阶段 `grep "^RESULT"` 收一行。
+
+**表达式缓存实测**（sh600000，`RollingZScore($close,20)`，2020-06-01..2020-07-31，末值）：
+
+| 阶段 | SCALE | cache | 末值 | vs V1 | 磁盘 |
+|---|---|---|---|---|---|
+| 1 写 | 1 | on | -1.2040842772 | V1 | 写 `features_cache/sh600000/24172193cc4126f8c8b2f543da416881`(+`.meta`) |
+| 2 实现×2 | 2 | on | **-1.2040842772** | =V1 **STALE**（新 `_load_internal` 未调） | 旧 bin 命中 |
+| 3 旁路 | 2 | off | -2.4081685543 | =2×V1 fresh | **bin 仍在磁盘**（`bin_count` 不变） |
+| 4 再开 | 2 | on | **-1.2040842772** | =V1 **stale 复现** | 旁路≠清除（决定性证据） |
+| 5 `rm -rf features_cache` | 2 | on | -2.4081685543 | =2×V1 fresh | 删后重写 |
+
+**dataset 缓存实测**（同协议，`dataset_cache="DiskDatasetCache"` + `expression_cache=None` 隔离）：
+
+| 阶段 | SCALE | dcache | 末值 | ds_files |
+|---|---|---|---|---|
+| 1 写 | 1 | on | -1.2040842772 | 2（`.data`+`.meta`） |
+| 2 实现×2 | 2 | on | **-1.2040842772** STALE | 2 |
+| 3 旁路 | 2 | off | -2.4081685543 | **2（仍在磁盘）** |
+| 4 再开 | 2 | on | **-1.2040842772** stale | 2 |
+| 5 `rm -rf dataset_cache` | 2 | on | -2.4081685543 | 2 |
+
+**结论**：红线 #1 的 stale 机制 + "旁路≠清除"在**两个缓存**上经验复现，数字逐字可重跑。`V1=-1.2040842772`、`2×V1=-2.4081685543`；阶段 2/4（cache on, SCALE=2）静默返回旧 `V1`（不是 `2×V1`），阶段 3 旁路得新 `2×V1` 但磁盘文件计数不变（仍在），阶段 5 删后重写得新值。**全程无报错/无警告**——`_load_internal` 的 SCALE=2 体在 cache on 命中时根本不被调用。注：阶段 2/4 的 stale 与阶段 3 的 fresh 是同一 SCALE=2 实现，差别仅在 cache 开关——证明"旁路≠清除"（旁路本次得新值，但磁盘 stale 仍在，重开即复发）。
 
 ---
 
